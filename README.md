@@ -23,7 +23,7 @@ One can set TS = "MD" or TS = "block" to use different chordal extentions.
 
 
 ## References
-[1] [SparseJSR: A Fast Algorithm to Compute Joint Spectral Radius via Sparse SOS Decompositions](https://arxiv.org/abs/1912.08899)  
+[1] [SparseJSR: A Fast Algorithm to Compute Joint Spectral Radius via Sparse SOS Decompositions](https://arxiv.org/abs/2008.11441), Jie Wang, Martina Maggio and Victor Magron, 2020.    
 
 ## Contact
 [Jie Wang](https://wangjie212.github.io/jiewang/): jwang@laas.fr
