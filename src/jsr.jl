@@ -213,9 +213,10 @@ function JSR!(A,d;lb=0,ub=2,tol=1e-5)
         set_optimizer_attribute(model, MOI.Silent(), true)
         pos=@variable(model, [1:lbasis, 1:lbasis], PSD)
         xbasis=[prod(x.^basis[:,i]) for i=1:lbasis]
+        # p=xbasis'*pos*xbasis+sum([prod(x.^(2*basis[:,i])) for i=1:lbasis])
         p=xbasis'*pos*xbasis
-        @constraint(model, [i in ind], pos[i, i]>=1)
-        # @constraint(model, pos[1, 1]==0.1)
+        @constraint(model, sum(pos)==1)
+        # @constraint(model, [i in ind], pos[i, i]>=1)
         for k=1:m
             cons=[AffExpr(0) for i=1:lp]
             pos=@variable(model, [1:lbasis, 1:lbasis], PSD)
@@ -263,21 +264,21 @@ function get_hbasis(n,d)
     return basis[end:-1:1,end:-1:1]
 end
 
-function comp(a,b)
+function comp(a, b)
     i=1
     while i<=length(a)
-        if a[i]<b[i]
-            return -1
-        elseif a[i]>b[i]
-            return 1
-        else
-            i+=1
-        end
+          if a[i]<b[i]
+             return -1
+          elseif a[i]>b[i]
+             return 1
+          else
+             i+=1
+          end
     end
     return 0
 end
 
-function bfind(A,l,a)
+function bfind(A, l, a)
     if l==0
         return 0
     end
@@ -286,16 +287,16 @@ function bfind(A,l,a)
     while low<=high
         mid=Int(ceil(1/2*(low+high)))
         if length(a)>1
-            order=comp(A[:,mid],a)
+            order=comp(A[:, mid], a)
         else
-            order=comp(A[mid],a)
+            order=comp(A[mid], a)
         end
         if order==0
            return mid
-        elseif order>0
-           low=mid+1
-        else
+        elseif order<0
            high=mid-1
+        else
+           low=mid+1
         end
     end
     return 0
