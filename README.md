@@ -12,7 +12,7 @@ pkg> add https://github.com/wangjie212/SparseJSR
 SparseJSR has been tested on WINDOW 10, Julia 1.2, JuMP 0.21 and MOSEK 8.1.
 ## Usage
 
-Assume that A is a set of matrices.
+Assume that A is a tuple of matrices.
 ```Julia
 julia> d = 2 # the relaxation order
 julia> ub = SpareseJSR!(A, d, TS = "MD") # ub is a upper bound of the joint spetral radius of A
