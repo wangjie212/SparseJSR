@@ -201,21 +201,21 @@ function JSR!(A,d;lb=0,ub=2,tol=1e-5)
     lbasis=size(basis,2)
     supp=get_hbasis(n,2d)
     lp=size(supp,2)
-    ind=zeros(UInt16, n)
-    for i=1:n
-        temp=zeros(UInt8, n)
-        temp[i]=d
-        ind[i]=bfind(basis,lbasis,temp)
-    end
+    # ind=zeros(UInt16, n)
+    # for i=1:n
+    #     temp=zeros(UInt8, n)
+    #     temp[i]=d
+    #     ind[i]=bfind(basis,lbasis,temp)
+    # end
     while ub-lb>tol
         gamma=(lb+ub)/2
         model=Model(optimizer_with_attributes(Mosek.Optimizer))
         set_optimizer_attribute(model, MOI.Silent(), true)
         pos=@variable(model, [1:lbasis, 1:lbasis], PSD)
         xbasis=[prod(x.^basis[:,i]) for i=1:lbasis]
-        # p=xbasis'*pos*xbasis+sum([prod(x.^(2*basis[:,i])) for i=1:lbasis])
-        p=xbasis'*pos*xbasis
-        @constraint(model, sum(pos)==1)
+        p=xbasis'*pos*xbasis+sum([prod(x.^(2*basis[:,i])) for i=1:lbasis])
+        # p=xbasis'*pos*xbasis
+        # @constraint(model, sum(pos)==1)
         # @constraint(model, [i in ind], pos[i, i]>=1)
         for k=1:m
             cons=[AffExpr(0) for i=1:lp]
