@@ -15,11 +15,11 @@ SparseJSR has been tested on WINDOW 10, Julia 1.2, JuMP 0.21 and MOSEK 8.1.
 Assume that A is a tuple of matrices.
 ```Julia
 julia> d = 2 # the relaxation order
-julia> ub = SpareseJSR!(A, d, TS = "MD") # ub is a upper bound of the joint spetral radius of A
+julia> ub = SpareseJSR(A, d, TS = "block") # ub is a upper bound of the joint spetral radius of A
 ```
 By default, the initial lower bound and the initial upper bound for bisection are lb = 0 and ub = 2 respectively.  
 The default tolerance is tol = 1e-5.  
-One can set TS = "MD" or TS = "block" to use different chordal extentions.
+One can set TS = "block" or TS = "MD" to use different chordal extentions.
 
 
 ## References
