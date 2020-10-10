@@ -8,7 +8,7 @@ using MosekTools
 using LinearAlgebra
 using LightGraphs
 
-export SpareseJSR0!, SpareseJSR!, JSR!
+export SpareseJSR0, SpareseJSR, JSR
 
 include("chordal_extension.jl")
 include("jsr.jl")

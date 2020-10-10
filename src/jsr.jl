@@ -1,4 +1,178 @@
-function SpareseJSR0!(A,d;lb=0,ub=2,tol=1e-5,QUIET=false)
+function SpareseJSR(A, d; lb=0, ub=2, tol=1e-5, TS="block", SparseOrder=1, QUIET=false)
+    n=size(A[1], 2)
+    m=length(A)
+    @polyvar x[1:n]
+    supp=Vector{Array{UInt8, 2}}(undef, m+1)
+    tsupp=Vector{Array{UInt8, 2}}(undef, m+1)
+    gbasis=Vector{Array{UInt8, 2}}(undef, m+1)
+    ltsupp=Vector{UInt16}(undef, m+1)
+    supp[1]=Array(Diagonal([2d for i=1:n]))
+    lsupp=n
+
+    # generate a sparse support
+    for k=1:SparseOrder
+        p=sum([prod(x.^supp[1][:,i]) for i=1:lsupp])
+        for i=1:m
+            cons_poly=p(x=>A[i]*x)
+            mon=monomials(cons_poly)
+            lm=length(mon)
+            cons_supp=zeros(UInt8,n,lm)
+            for j=1:lm, k=1:n
+                cons_supp[k,j]=MultivariatePolynomials.degree(mon[j],x[k])
+            end
+            supp[1]=[supp[1] cons_supp]
+        end
+        supp[1]=sortslices(supp[1], dims=2, rev=true)
+        supp[1]=unique(supp[1], dims=2)
+        if size(supp[1], 2)>lsupp
+            lsupp=size(supp[1], 2)
+        else
+            println("No higher sparse hierarchy!")
+            return nothing
+        end
+    end
+
+    ind=zeros(UInt16, n)
+    for i=1:n
+        temp=zeros(UInt8, n)
+        temp[i]=2d
+        ind[i]=bfind(supp[1],size(supp[1],2),temp)
+    end
+    basis=get_hbasis(n,d)
+    blocks=Vector{Vector{Vector{Int64}}}(undef, m+1)
+    cl=Vector{Int64}(undef, m+1)
+    blocksize=Vector{Vector{Int64}}(undef, m+1)
+    sLocb=Vector{Vector{UInt16}}(undef, m+1)
+    pcoe=ones(Float64, size(supp[1],2))
+    psupp=[prod(x.^supp[1][:,i]) for i=1:lsupp]
+    p=pcoe'*psupp
+    for i=1:m+1
+        if i>1
+            mon=monomials(p(x=>A[i-1]*x))
+            lm=length(mon)
+            supp[i]=zeros(UInt8,n,lm)
+            for j=1:lm, k=1:n
+                supp[i][k,j]=MultivariatePolynomials.degree(mon[j],x[k])
+            end
+            supp[i]=[supp[1] supp[i]]
+            supp[i]=sortslices(supp[i],dims=2,rev=true)
+            supp[i]=unique(supp[i], dims=2)
+        end
+        gbasis[i]=generate_basis!(n,supp[i],basis)
+        blocks[i],cl[i],blocksize[i]=get_blocks(n,supp[i],gbasis[i],TS=TS,QUIET=QUIET)
+        tsupp[i]=zeros(UInt8,n,Int(sum(blocksize[i].^2+blocksize[i])/2))
+        s=1
+        for k=1:cl[i], j=1:blocksize[i][k], r=j:blocksize[i][k]
+            bi=gbasis[i][:,blocks[i][k][j]]+gbasis[i][:,blocks[i][k][r]]
+            tsupp[i][:,s]=bi
+            s+=1
+        end
+        tsupp[i]=sortslices(tsupp[i],dims=2,rev=true)
+        tsupp[i]=unique(tsupp[i],dims=2)
+        ltsupp[i]=size(tsupp[i],2)
+        sLocb[i]=zeros(UInt16, size(supp[i],2))
+        for k=1:size(supp[i],2)
+            sLocb[i][k]=bfind(tsupp[i],ltsupp[i],supp[i][:,k])
+        end
+    end
+    while ub-lb>tol
+        gamma=(lb+ub)/2
+        model=Model(optimizer_with_attributes(Mosek.Optimizer))
+        set_optimizer_attribute(model, MOI.Silent(), true)
+        pcoe=@variable(model, [1:size(supp[1],2)])
+        p=pcoe'*psupp
+        @constraint(model, pcoe[ind].>=0.1)
+        for k=1:m+1
+            cons=[AffExpr(0) for i=1:ltsupp[k]]
+            for i=1:cl[k]
+                if blocksize[k][i]==1
+                   pos=@variable(model, lower_bound=0)
+                   bi=2*gbasis[k][:,blocks[k][i]]
+                   Locb=bfind(tsupp[k],ltsupp[k],bi)
+                   cons[Locb]+=pos
+                else
+                   pos=@variable(model, [1:blocksize[k][i], 1:blocksize[k][i]], PSD)
+                   for j=1:blocksize[k][i], r=j:blocksize[k][i]
+                       bi=gbasis[k][:,blocks[k][i][j]]+gbasis[k][:,blocks[k][i][r]]
+                       Locb=bfind(tsupp[k],ltsupp[k],bi)
+                       if j==r
+                          cons[Locb]+=pos[j,r]
+                       else
+                          cons[Locb]+=2*pos[j,r]
+                       end
+                   end
+                end
+            end
+            if k>1
+                coe=coefficients(gamma^(2d)*p-p(x=>A[k-1]*x))
+            else
+                coe=pcoe
+            end
+            bc=[AffExpr(0) for i=1:ltsupp[k]]
+            bc[sLocb[k]].=coe
+            @constraint(model, cons.==bc)
+        end
+        optimize!(model)
+        if termination_status(model)==MOI.OPTIMAL
+            ub=gamma
+        else
+            lb=gamma
+        end
+    end
+    return ub
+end
+
+function JSR(A, d; lb=0, ub=2, tol=1e-5)
+    n=size(A[1],2)
+    m=length(A)
+    @polyvar x[1:n]
+    basis=get_hbasis(n,d)
+    lbasis=size(basis,2)
+    supp=get_hbasis(n,2d)
+    lp=size(supp,2)
+    # ind=zeros(UInt16, n)
+    # for i=1:n
+    #     temp=zeros(UInt8, n)
+    #     temp[i]=d
+    #     ind[i]=bfind(basis,lbasis,temp)
+    # end
+    while ub-lb>tol
+        gamma=(lb+ub)/2
+        model=Model(optimizer_with_attributes(Mosek.Optimizer))
+        set_optimizer_attribute(model, MOI.Silent(), true)
+        pos=@variable(model, [1:lbasis, 1:lbasis], PSD)
+        xbasis=[prod(x.^basis[:,i]) for i=1:lbasis]
+        p=xbasis'*pos*xbasis+sum([prod(x.^(2*basis[:,i])) for i=1:lbasis])
+        # p=xbasis'*pos*xbasis
+        # @constraint(model, sum(pos)==1)
+        # @constraint(model, [i in ind], pos[i, i]>=1)
+        for k=1:m
+            cons=[AffExpr(0) for i=1:lp]
+            pos=@variable(model, [1:lbasis, 1:lbasis], PSD)
+            for j=1:lbasis, r=j:lbasis
+                bi=basis[:,j]+basis[:,r]
+                Locb=bfind(supp,lp,bi)
+                if j==r
+                   cons[Locb]+=pos[j,r]
+                else
+                   cons[Locb]+=2*pos[j,r]
+                end
+            end
+            coe=coefficients(gamma^(2d)*p-p(x=>A[k]*x))
+            @constraint(model, cons.==coe)
+        end
+        optimize!(model)
+        # MOI.write_to_file(backend(model).optimizer.model, "E:\\Programs\\SparseJSR\\model3.cbf")
+        if termination_status(model)==MOI.OPTIMAL
+            ub=gamma
+        else
+            lb=gamma
+        end
+    end
+    return ub
+end
+
+function SpareseJSR0(A, d; lb=0, ub=2, tol=1e-5, QUIET=false)
     n=size(A[1],2)
     m=length(A)
     # zvar=get_zcol(A,n)
@@ -81,169 +255,7 @@ function SpareseJSR0!(A,d;lb=0,ub=2,tol=1e-5,QUIET=false)
     return ub
 end
 
-function SpareseJSR!(A,d;lb=0,ub=2,tol=1e-5,TS="block",QUIET=false)
-    n=size(A[1],2)
-    m=length(A)
-    @polyvar x[1:n]
-    init_poly=sum(x.^(2d))
-    supp=Vector{Array{UInt8, 2}}(undef, m+1)
-    tsupp=Vector{Array{UInt8, 2}}(undef, m+1)
-    gbasis=Vector{Array{UInt8, 2}}(undef, m+1)
-    ltsupp=Vector{UInt16}(undef, m+1)
-    supp[1]=Array(Diagonal([2d for i=1:n]))
-    for i=1:m
-        cons_poly=init_poly(x=>A[i]*x)
-        mon=monomials(cons_poly)
-        lm=length(mon)
-        cons_supp=zeros(UInt8,n,lm)
-        for j=1:lm, k=1:n
-            cons_supp[k,j]=MultivariatePolynomials.degree(mon[j],x[k])
-        end
-        supp[1]=[supp[1] cons_supp]
-    end
-    supp[1]=sortslices(supp[1],dims=2,rev=true)
-    supp[1]=unique(supp[1],dims=2)
-    ind=zeros(UInt16, n)
-    for i=1:n
-        temp=zeros(UInt8, n)
-        temp[i]=2d
-        ind[i]=bfind(supp[1],size(supp[1],2),temp)
-    end
-    basis=get_hbasis(n,d)
-    blocks=Vector{Vector{Vector{Int64}}}(undef, m+1)
-    cl=Vector{Int64}(undef, m+1)
-    blocksize=Vector{Vector{Int64}}(undef, m+1)
-    sLocb=Vector{Vector{UInt16}}(undef, m+1)
-    pcoe=ones(Float64, size(supp[1],2))
-    psupp=[prod(x.^supp[1][:,i]) for i=1:size(supp[1],2)]
-    p=pcoe'*psupp
-    for i=1:m+1
-        if i>1
-            mon=monomials(p(x=>A[i-1]*x))
-            lm=length(mon)
-            supp[i]=zeros(UInt8,n,lm)
-            for j=1:lm, k=1:n
-                supp[i][k,j]=MultivariatePolynomials.degree(mon[j],x[k])
-            end
-            supp[i]=[supp[1] supp[i]]
-            supp[i]=sortslices(supp[i],dims=2,rev=true)
-            supp[i]=unique(supp[i],dims=2)
-        end
-        gbasis[i]=generate_basis!(n,supp[i],basis)
-        blocks[i],cl[i],blocksize[i]=get_blocks(n,supp[i],gbasis[i],TS=TS,QUIET=QUIET)
-        tsupp[i]=zeros(UInt8,n,Int(sum(blocksize[i].^2+blocksize[i])/2))
-        s=1
-        for k=1:cl[i], j=1:blocksize[i][k], r=j:blocksize[i][k]
-            bi=gbasis[i][:,blocks[i][k][j]]+gbasis[i][:,blocks[i][k][r]]
-            tsupp[i][:,s]=bi
-            s+=1
-        end
-        tsupp[i]=sortslices(tsupp[i],dims=2,rev=true)
-        tsupp[i]=unique(tsupp[i],dims=2)
-        ltsupp[i]=size(tsupp[i],2)
-        sLocb[i]=zeros(UInt16, size(supp[i],2))
-        for k=1:size(supp[i],2)
-            sLocb[i][k]=bfind(tsupp[i],ltsupp[i],supp[i][:,k])
-        end
-    end
-    while ub-lb>tol
-        gamma=(lb+ub)/2
-        model=Model(optimizer_with_attributes(Mosek.Optimizer))
-        set_optimizer_attribute(model, MOI.Silent(), true)
-        pcoe=@variable(model, [1:size(supp[1],2)])
-        p=pcoe'*psupp
-        @constraint(model, pcoe[ind].>=0.1)
-        for k=1:m+1
-            cons=[AffExpr(0) for i=1:ltsupp[k]]
-            for i=1:cl[k]
-                if blocksize[k][i]==1
-                   pos=@variable(model, lower_bound=0)
-                   bi=2*gbasis[k][:,blocks[k][i]]
-                   Locb=bfind(tsupp[k],ltsupp[k],bi)
-                   cons[Locb]+=pos
-                else
-                   pos=@variable(model, [1:blocksize[k][i], 1:blocksize[k][i]], PSD)
-                   for j=1:blocksize[k][i], r=j:blocksize[k][i]
-                       bi=gbasis[k][:,blocks[k][i][j]]+gbasis[k][:,blocks[k][i][r]]
-                       Locb=bfind(tsupp[k],ltsupp[k],bi)
-                       if j==r
-                          cons[Locb]+=pos[j,r]
-                       else
-                          cons[Locb]+=2*pos[j,r]
-                       end
-                   end
-                end
-            end
-            if k>1
-                coe=coefficients(gamma^(2d)*p-p(x=>A[k-1]*x))
-            else
-                coe=pcoe
-            end
-            bc=[AffExpr(0) for i=1:ltsupp[k]]
-            bc[sLocb[k]].=coe
-            @constraint(model, cons.==bc)
-        end
-        optimize!(model)
-        if termination_status(model)==MOI.OPTIMAL
-            ub=gamma
-        else
-            lb=gamma
-        end
-    end
-    return ub
-end
-
-function JSR!(A,d;lb=0,ub=2,tol=1e-5)
-    n=size(A[1],2)
-    m=length(A)
-    @polyvar x[1:n]
-    basis=get_hbasis(n,d)
-    lbasis=size(basis,2)
-    supp=get_hbasis(n,2d)
-    lp=size(supp,2)
-    # ind=zeros(UInt16, n)
-    # for i=1:n
-    #     temp=zeros(UInt8, n)
-    #     temp[i]=d
-    #     ind[i]=bfind(basis,lbasis,temp)
-    # end
-    while ub-lb>tol
-        gamma=(lb+ub)/2
-        model=Model(optimizer_with_attributes(Mosek.Optimizer))
-        set_optimizer_attribute(model, MOI.Silent(), true)
-        pos=@variable(model, [1:lbasis, 1:lbasis], PSD)
-        xbasis=[prod(x.^basis[:,i]) for i=1:lbasis]
-        p=xbasis'*pos*xbasis+sum([prod(x.^(2*basis[:,i])) for i=1:lbasis])
-        # p=xbasis'*pos*xbasis
-        # @constraint(model, sum(pos)==1)
-        # @constraint(model, [i in ind], pos[i, i]>=1)
-        for k=1:m
-            cons=[AffExpr(0) for i=1:lp]
-            pos=@variable(model, [1:lbasis, 1:lbasis], PSD)
-            for j=1:lbasis, r=j:lbasis
-                bi=basis[:,j]+basis[:,r]
-                Locb=bfind(supp,lp,bi)
-                if j==r
-                   cons[Locb]+=pos[j,r]
-                else
-                   cons[Locb]+=2*pos[j,r]
-                end
-            end
-            coe=coefficients(gamma^(2d)*p-p(x=>A[k]*x))
-            @constraint(model, cons.==coe)
-        end
-        optimize!(model)
-        # MOI.write_to_file(backend(model).optimizer.model, "E:\\Programs\\SparseJSR\\model3.cbf")
-        if termination_status(model)==MOI.OPTIMAL
-            ub=gamma
-        else
-            lb=gamma
-        end
-    end
-    return ub
-end
-
-function get_hbasis(n,d)
+function get_hbasis(n, d)
     lb=binomial(n-1+d,d)
     basis=zeros(UInt8,n,lb)
     basis[1,1]=d
@@ -302,7 +314,7 @@ function bfind(A, l, a)
     return 0
 end
 
-function generate_basis!(n,supp,basis)
+function generate_basis!(n, supp, basis)
     supp=sortslices(supp,dims=2,rev=true)
     supp=unique(supp,dims=2)
     lsupp=size(supp,2)
@@ -319,7 +331,7 @@ function generate_basis!(n,supp,basis)
     return basis[:,indexb]
 end
 
-function get_blocks(n,supp,basis;TS="block",QUIET=true)
+function get_blocks(n, supp, basis; TS="block", QUIET=true)
     if TS==false
         blocksize=[size(basis,2)]
         blocks=[[i for i=1:size(basis,2)]]
@@ -355,19 +367,17 @@ function get_blocks(n,supp,basis;TS="block",QUIET=true)
     return blocks,cl,blocksize
 end
 
-# function get_zcol(A,n)
+# function get_zcol(A, n)
 #     m=length(A)
 #     zerocol=[UInt8[] for i=1:m]
-#     for i=1:m
-#         for j=1:n
-#             if all(x->x==0, A[i][:,j])
-#                 push!(zerocol[i],j)
-#             end
+#     for i=1:m, j=1:n
+#         if all(x->x==0, A[i][:,j])
+#             push!(zerocol[i], j)
 #         end
 #     end
 #     zcol=zerocol[1]
 #     for i=2:m
-#         intersect!(zcol,zerocol[i])
+#         intersect!(zcol, zerocol[i])
 #     end
 #     return zcol
 # end
@@ -449,20 +459,6 @@ end
 #     if solsta==MSK_SOL_STA_OPTIMAL
 #        println("Optimal!")
 #     end
-# end
-
-# function comp(a,b)
-#     i=length(a)
-#     while i>=1
-#           if a[i]<b[i]
-#              return -1
-#           elseif a[i]>b[i]
-#              return 1
-#           else
-#              i-=1
-#           end
-#     end
-#     return 0
 # end
 
 # function SpareseJSR2(A,d;lb=0,ub=2,tol=1e-5)
