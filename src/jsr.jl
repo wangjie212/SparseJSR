@@ -32,12 +32,12 @@ function SpareseJSR(A, d; lb=0, ub=2, tol=1e-5, TS="block", SparseOrder=1, QUIET
         end
     end
 
-    ind=zeros(UInt16, n)
-    for i=1:n
-        temp=zeros(UInt8, n)
-        temp[i]=2d
-        ind[i]=bfind(supp[1],size(supp[1],2),temp)
-    end
+    # ind=zeros(UInt16, n)
+    # for i=1:n
+    #     temp=zeros(UInt8, n)
+    #     temp[i]=2d
+    #     ind[i]=bfind(supp[1],size(supp[1],2),temp)
+    # end
     basis=get_hbasis(n,d)
     blocks=Vector{Vector{Vector{Int64}}}(undef, m+1)
     cl=Vector{Int64}(undef, m+1)
@@ -81,7 +81,7 @@ function SpareseJSR(A, d; lb=0, ub=2, tol=1e-5, TS="block", SparseOrder=1, QUIET
         set_optimizer_attribute(model, MOI.Silent(), true)
         pcoe=@variable(model, [1:size(supp[1],2)])
         p=pcoe'*psupp
-        @constraint(model, pcoe[ind].>=0.1)
+        # @constraint(model, pcoe[ind].>=0.1)
         for k=1:m+1
             cons=[AffExpr(0) for i=1:ltsupp[k]]
             for i=1:cl[k]
@@ -89,14 +89,22 @@ function SpareseJSR(A, d; lb=0, ub=2, tol=1e-5, TS="block", SparseOrder=1, QUIET
                    pos=@variable(model, lower_bound=0)
                    bi=2*gbasis[k][:,blocks[k][i]]
                    Locb=bfind(tsupp[k],ltsupp[k],bi)
-                   cons[Locb]+=pos
+                   if k==1
+                       cons[Locb]+=pos+1
+                   else
+                       cons[Locb]+=pos
+                   end
                 else
                    pos=@variable(model, [1:blocksize[k][i], 1:blocksize[k][i]], PSD)
                    for j=1:blocksize[k][i], r=j:blocksize[k][i]
                        bi=gbasis[k][:,blocks[k][i][j]]+gbasis[k][:,blocks[k][i][r]]
                        Locb=bfind(tsupp[k],ltsupp[k],bi)
                        if j==r
-                          cons[Locb]+=pos[j,r]
+                           if k==1
+                               cons[Locb]+=pos[j,r]+1
+                           else
+                               cons[Locb]+=pos[j,r]
+                           end
                        else
                           cons[Locb]+=2*pos[j,r]
                        end
