@@ -32,12 +32,6 @@ function SpareseJSR(A, d; lb=0, ub=2, tol=1e-5, TS="block", SparseOrder=1, QUIET
         end
     end
 
-    # ind=zeros(UInt16, n)
-    # for i=1:n
-    #     temp=zeros(UInt8, n)
-    #     temp[i]=2d
-    #     ind[i]=bfind(supp[1],size(supp[1],2),temp)
-    # end
     basis=get_hbasis(n,d)
     blocks=Vector{Vector{Vector{Int64}}}(undef, m+1)
     cl=Vector{Int64}(undef, m+1)
@@ -81,7 +75,6 @@ function SpareseJSR(A, d; lb=0, ub=2, tol=1e-5, TS="block", SparseOrder=1, QUIET
         set_optimizer_attribute(model, MOI.Silent(), true)
         pcoe=@variable(model, [1:size(supp[1],2)])
         p=pcoe'*psupp
-        # @constraint(model, pcoe[ind].>=0.1)
         for k=1:m+1
             cons=[AffExpr(0) for i=1:ltsupp[k]]
             for i=1:cl[k]
@@ -89,24 +82,16 @@ function SpareseJSR(A, d; lb=0, ub=2, tol=1e-5, TS="block", SparseOrder=1, QUIET
                    pos=@variable(model, lower_bound=0)
                    bi=2*gbasis[k][:,blocks[k][i]]
                    Locb=bfind(tsupp[k],ltsupp[k],bi)
-                   if k==1
-                       cons[Locb]+=pos+1
-                   else
-                       cons[Locb]+=pos
-                   end
+                   @inbounds add_to_expression!(cons[Locb], pos)
                 else
                    pos=@variable(model, [1:blocksize[k][i], 1:blocksize[k][i]], PSD)
                    for j=1:blocksize[k][i], r=j:blocksize[k][i]
                        bi=gbasis[k][:,blocks[k][i][j]]+gbasis[k][:,blocks[k][i][r]]
                        Locb=bfind(tsupp[k],ltsupp[k],bi)
                        if j==r
-                           if k==1
-                               cons[Locb]+=pos[j,r]+1
-                           else
-                               cons[Locb]+=pos[j,r]
-                           end
+                           @inbounds add_to_expression!(cons[Locb], pos[j,r])
                        else
-                          cons[Locb]+=2*pos[j,r]
+                           @inbounds add_to_expression!(cons[Locb], 2, pos[j,r])
                        end
                    end
                 end
@@ -115,6 +100,12 @@ function SpareseJSR(A, d; lb=0, ub=2, tol=1e-5, TS="block", SparseOrder=1, QUIET
                 coe=coefficients(gamma^(2d)*p-p(x=>A[k-1]*x))
             else
                 coe=pcoe
+                for i=1:n
+                    temp=zeros(UInt8, n)
+                    temp[i]=2d
+                    Locb=bfind(tsupp[1],ltsupp[1],temp)
+                    @inbounds add_to_expression!(cons[Locb], 1)
+                end
             end
             bc=[AffExpr(0) for i=1:ltsupp[k]]
             bc[sLocb[k]].=coe
@@ -130,7 +121,7 @@ function SpareseJSR(A, d; lb=0, ub=2, tol=1e-5, TS="block", SparseOrder=1, QUIET
     return ub
 end
 
-function JSR(A, d; lb=0, ub=2, tol=1e-5)
+function JSR(A, d; lb=0, ub=2, tol=1e-5, QUIET=true)
     n=size(A[1],2)
     m=length(A)
     @polyvar x[1:n]
@@ -138,22 +129,13 @@ function JSR(A, d; lb=0, ub=2, tol=1e-5)
     lbasis=size(basis,2)
     supp=get_hbasis(n,2d)
     lp=size(supp,2)
-    # ind=zeros(UInt16, n)
-    # for i=1:n
-    #     temp=zeros(UInt8, n)
-    #     temp[i]=d
-    #     ind[i]=bfind(basis,lbasis,temp)
-    # end
     while ub-lb>tol
         gamma=(lb+ub)/2
         model=Model(optimizer_with_attributes(Mosek.Optimizer))
-        set_optimizer_attribute(model, MOI.Silent(), true)
+        set_optimizer_attribute(model, MOI.Silent(), QUIET)
         pos=@variable(model, [1:lbasis, 1:lbasis], PSD)
         xbasis=[prod(x.^basis[:,i]) for i=1:lbasis]
-        p=xbasis'*pos*xbasis+sum([prod(x.^(2*basis[:,i])) for i=1:lbasis])
-        # p=xbasis'*pos*xbasis
-        # @constraint(model, sum(pos)==1)
-        # @constraint(model, [i in ind], pos[i, i]>=1)
+        p=xbasis'*pos*xbasis+sum(x.^2d)
         for k=1:m
             cons=[AffExpr(0) for i=1:lp]
             pos=@variable(model, [1:lbasis, 1:lbasis], PSD)
@@ -161,9 +143,9 @@ function JSR(A, d; lb=0, ub=2, tol=1e-5)
                 bi=basis[:,j]+basis[:,r]
                 Locb=bfind(supp,lp,bi)
                 if j==r
-                   cons[Locb]+=pos[j,r]
+                   @inbounds add_to_expression!(cons[Locb], pos[j,r])
                 else
-                   cons[Locb]+=2*pos[j,r]
+                   @inbounds add_to_expression!(cons[Locb], 2, pos[j,r])
                 end
             end
             coe=coefficients(gamma^(2d)*p-p(x=>A[k]*x))
@@ -183,7 +165,6 @@ end
 function SpareseJSR0(A, d; lb=0, ub=2, tol=1e-5, QUIET=false)
     n=size(A[1],2)
     m=length(A)
-    # zvar=get_zcol(A,n)
     @polyvar x[1:n]
     init_poly=sum(x.^(2d))
     tsupp=Array(Diagonal([2d for i=1:n]))
@@ -200,12 +181,6 @@ function SpareseJSR0(A, d; lb=0, ub=2, tol=1e-5, QUIET=false)
     tsupp=sortslices(tsupp,dims=2,rev=true)
     tsupp=unique(tsupp,dims=2)
     ltsupp=size(tsupp,2)
-    ind=zeros(UInt16, n)
-    for i=1:n
-        temp=zeros(UInt8, n)
-        temp[i]=2d
-        ind[i]=bfind(tsupp,ltsupp,temp)
-    end
     basis=get_hbasis(n,d)
     basis=generate_basis!(n,tsupp,basis)
     blocks,cl,blocksize=get_blocks(n,tsupp,basis,QUIET=QUIET)
@@ -216,7 +191,6 @@ function SpareseJSR0(A, d; lb=0, ub=2, tol=1e-5, QUIET=false)
         set_optimizer_attribute(model, MOI.Silent(), true)
         coe0=@variable(model, [1:ltsupp])
         p=coe0'*psupp
-        @constraint(model, coe0[ind].>=0.1)
         for k=1:m+1
             cons=[AffExpr(0) for i=1:ltsupp]
             for i=1:cl
@@ -224,16 +198,16 @@ function SpareseJSR0(A, d; lb=0, ub=2, tol=1e-5, QUIET=false)
                    pos=@variable(model, lower_bound=0)
                    bi=2*basis[:,blocks[i]]
                    Locb=bfind(tsupp,ltsupp,bi)
-                   cons[Locb]+=pos
+                   @inbounds add_to_expression!(cons[Locb], pos)
                 else
                    pos=@variable(model, [1:blocksize[i], 1:blocksize[i]], PSD)
                    for j=1:blocksize[i], r=j:blocksize[i]
                        bi=basis[:,blocks[i][j]]+basis[:,blocks[i][r]]
                        Locb=bfind(tsupp,ltsupp,bi)
                        if j==r
-                          cons[Locb]+=pos[j,r]
+                          @inbounds add_to_expression!(cons[Locb], pos[j,r])
                        else
-                          cons[Locb]+=2*pos[j,r]
+                          @inbounds add_to_expression!(cons[Locb], 2, pos[j,r])
                        end
                    end
                 end
@@ -242,17 +216,15 @@ function SpareseJSR0(A, d; lb=0, ub=2, tol=1e-5, QUIET=false)
                 coe=coefficients(gamma^(2d)*p-p(x=>A[k-1]*x))
             else
                 coe=coe0
+                for i=1:n
+                    temp=zeros(UInt8, n)
+                    temp[i]=2d
+                    Locb=bfind(tsupp[1],ltsupp[1],temp)
+                    @inbounds add_to_expression!(cons[Locb], 1)
+                end
             end
             @constraint(model, cons.==coe)
         end
-        # if zvar!=[]
-        #     temp=zeros(UInt8,n)
-        #     temp[zvar[1]]=2d
-        #     Locb=bfind(tsupp,ltsupp,temp)
-        #     @constraint(model, coe0[Locb]==0.1)
-        # else
-            # @constraint(model, coe0[1]==0.1)
-        # end
         optimize!(model)
         if termination_status(model)==MOI.OPTIMAL
             ub=gamma
@@ -369,7 +341,7 @@ function get_blocks(n, supp, basis; TS="block", QUIET=true)
     nsizes=[sum(blocksize.== i) for i in nub]
     if QUIET==false
         println("------------------------------------------------------")
-        println("The sizes of blocks:\n$nub\n$nsizes")
+        println("The sizes of PSD blocks:\n$nub\n$nsizes")
         println("------------------------------------------------------")
     end
     return blocks,cl,blocksize
